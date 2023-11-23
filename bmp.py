@@ -18,7 +18,7 @@ BMP is defined in RFC 7854.
 MVP to be able to prototype TLVs using https://tools.ietf.org/html/draft-ietf-grow-bmp-tlv-02.
 Most of the code here is based on the bgp implementation of scapy
 """
-import binascii
+import binascii, struct
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import TCP
 from scapy.fields import (
@@ -37,12 +37,15 @@ from scapy.fields import (
 )
 from scapy.config import conf
 from scapy.all import rdpcap
-from bgp import BGPUpdate, BGPOpen, BGPFieldIPv6, IP6Field, BGP
-import bgp
-import struct
+from scapy.contrib.bgp import *
 
-bgp.bgp_module_conf.use_2_bytes_asn = False
+import scapy.contrib.bgp
+scapy.contrib.bgp.bgp_module_conf.use_2_bytes_asn = False
 
+_bmp_versions = {
+    3: "version 3",
+    4: "version 4"
+}
 
 _bmp_message_types = {
     0: "ROUTE MONITORING",
@@ -51,9 +54,18 @@ _bmp_message_types = {
     3: "PEER UP NOTIFICATION",
     4: "INITIATION MESSAGE",
     5: "TERMINATION MESSAGE",
-    6: "ROUTE MIRROING MESSAGE",
+    6: "ROUTE MIRRORING MESSAGE",
 }
 
+_bmp_cls_by_type = {
+    0: "BMPRouteMonitoring",
+    1: "BMPStats",
+    2: "BMPPeerDown",
+    3: "BMPPeerUp",
+    4: "BMPInitiation",
+    5: "BMPTermination",
+    6: "BMPRouteMirroring",
+} 
 
 # Status flags from https://www.ietf.org/archive/id/draft-cppy-grow-bmp-path-marking-tlv-07.txt
 _bmp_status_flags = {
@@ -121,6 +133,67 @@ _bmp_reason_codes = {
     0xFFFF: "no reason code",
 }
 
+def _get_cls(name, fallback_cls=conf.raw_layer):
+    """
+    Returns class named "name" if it exists, fallback_cls otherwise.
+    """
+    return globals().get(name, fallback_cls)
+
+class BMPHeader(Packet):
+    """
+    The header of any BMP message.
+    References: https://tools.ietf.org/html/rfc7854,
+    """
+
+    name = "BMPHeader"
+    fields_desc = [
+        ByteField("version", 4),
+        IntField("len", None),
+        ByteEnumField("type", 0, _bmp_message_types),
+    ]
+
+    def guess_payload_class(self, payload):
+        return _get_cls(_bmp_cls_by_type.get(self.type, conf.raw_layer), conf.raw_layer)
+
+
+def _bmp_dispatcher(payload):
+    """
+    Returns the right class for a given BGP message.
+    """
+
+    cls = conf.raw_layer
+
+    # By default, calling BMP() will build a BMPHeader.
+    if payload is None:
+        cls = BMPHeader
+    
+    else:
+        if len(payload) > 5 and payload[:1] in bytes(_bmp_versions) \
+                            and payload[5:6] in bytes(_bmp_message_types):
+            cls = BMPHeader
+
+    return cls
+
+class BMP(Packet):
+    """
+     Every BMP  message inherits from this class.
+     """
+
+    @classmethod
+    def dispatch_hook(cls, _pkt=None, *args, **kargs):
+        """
+        Returns the right class for the given data.
+        """
+        return _bmp_dispatcher(_pkt)
+
+    def guess_payload_class(self, payload):
+        cls = None
+        if len(payload) > 5 and payload[:1] in bytes(_bmp_versions) \
+                            and payload[5:6] in bytes(_bmp_message_types):
+            cls = BMPHeader
+
+        return cls
+
 
 class PerPeerHeader(Packet):
     name = "PEERPEERHEADER"
@@ -143,7 +216,7 @@ class PerPeerHeader(Packet):
 
 
 class BMPInformationTLV(Packet):
-    name = "InformationTlV"
+    name = "BMPInformationTLV"
     fields_desc = [
         ShortField("Type", 0),
         FieldLenField("length", None, fmt="H", length_of="information"),
@@ -165,7 +238,9 @@ class BMPTerminationTLV(Packet):
 
 class BMPInitiation(Packet):
     name = "BMPInitiation"
-    fields_desc = [PacketListField("information", [], BMPInformationTLV)]
+    fields_desc = [
+        PacketListField("information", [], BMPInformationTLV)
+      ]
 
 
 class BMPPeerUpNotificationInfo(Packet):
@@ -190,24 +265,21 @@ class BMPPeerUp(Packet):
         PacketField("info", None, BMPPeerUpNotificationInfo),
     ]
 
-
-class BMPStatsCounter(Packet):
-    name = "BMPStatsCounter"
+class BMPStatsCounterTLV(Packet):
+    name = "BMPStatsCounterTLV"
     fields_desc = [
         ShortField("Type", 0),
-        FieldLenField("length", None, fmt="H", length_of="information"),
-        StrLenField("information", "", length_from=lambda p: p.length),
+        FieldLenField("length", None, fmt="H", length_of="data"),
+        StrLenField("data", "", length_from=lambda p: p.length),
     ]
 
 
 class BMPStats(Packet):
     name = "BMPStats"
     fields_desc = [
-        PacketField("PerPeer", None, PerPeerHeader),
-        FieldLenField("len", None, fmt="I", count_of="counters"),
-        PacketListField(
-            "counters", None, BMPStatsCounter, count_from=lambda pkt: pkt.length
-        ),
+        PacketField("PerPeerHeader", None, PerPeerHeader),
+        FieldLenField("stats_counts", None, fmt="I", count_of="statistic"),
+        PacketListField("statistic", None, BMPStatsCounterTLV, count_from=lambda p: p.stats_counts),
     ]
 
 class BMPPeerDown(Packet):
@@ -271,7 +343,7 @@ class TLVPathStatusEnterprise(Packet):
         OptionalField(ShortEnumField("reason", None, _bmp_reason_codes)),
     ]
 
-
+# TODO: correct this
 class BMPTLVPaolo(Packet):
     fields_desc = [
         ShortField("type", 0),
@@ -294,49 +366,13 @@ class BMPRouteMonitoring(Packet):
     ]
 
 
-class BMPRouteMirroing(Packet):
+class BMPRouteMirroring(Packet):
     name = "BMPRouteMirror"
     fields_desc = [
         ShortField("Type", 0),
         FieldLenField("length", None, fmt="H", length_of="data"),
         StrLenField("data", "", length_from=lambda p: p.length),
     ]
-
-
-class BMPHeader(Packet):
-    """
-    The header of any BMP message.
-    References: https://tools.ietf.org/html/rfc7854,
-    """
-
-    name = "BMPHeader"
-    fields_desc = [
-        ByteField("version", 4),
-        IntField("len", None),
-        ByteEnumField("type", 0, _bmp_message_types),
-    ]
-
-    def post_build(self, p, pay):
-        if self.len is None:
-            length = len(p)
-            if pay:
-                length = length + len(pay)
-            position_after_length = self.fields_desc[0].sz + self.fields_desc[1].sz
-            p = (
-                p[: self.fields_desc[0].sz]
-                + struct.pack("!I", length)
-                + p[position_after_length:]
-            )
-        return p + pay
-
-
-
-class BMP(Packet):
-    """
-     Every BMP  message inherits from this class.
-     """
-    def guess_payload_class(self, payload):
-        return BMPHeader
 
 
 class_to_type = {}
@@ -361,4 +397,4 @@ bind_layers(BMPHeader, BMPPeerDown, {"type": 2})
 bind_layers(BMPHeader, BMPPeerUp, {"type": 3})
 bind_layers(BMPHeader, BMPInitiation, {"type": 4})
 bind_layers(BMPHeader, BMPTermination, {"type": 5})
-bind_layers(BMPHeader, BMPRouteMirroing, {"type": 6})
+bind_layers(BMPHeader, BMPRouteMirroring, {"type": 6})
