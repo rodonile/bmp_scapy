@@ -55,6 +55,8 @@ _bmp_message_types = {
     4: "INITIATION MESSAGE",
     5: "TERMINATION MESSAGE",
     6: "ROUTE MIRRORING MESSAGE",
+    # TMP IANA CODE (https://datatracker.ietf.org/doc/html/draft-xu-grow-bmp-route-policy-attr-trace-08.html)
+    100: "ROUTE POLICY AND ATTRIBUTE TRACE MESSAGE"     
 }
 
 _bmp_cls_by_type = {
@@ -206,7 +208,7 @@ class PerPeerHeader(Packet):
         Field("peer_distinquisher", 0, fmt="Q"),
         IP6Field("peer_address", "::/0"),
         IntField("peer_asn", 0),
-        IntField("peer_bgp_id", 0),
+        IPField("peer_bgp_id", 0),
         IntField("timestamp_seconds", 0),
         IntField("timestamp_microseconds", 0),
     ]
@@ -218,9 +220,9 @@ class PerPeerHeader(Packet):
 class BMPInformationTLV(Packet):
     name = "BMPInformationTLV"
     fields_desc = [
-        ShortField("Type", 0),
-        FieldLenField("length", None, fmt="H", length_of="information"),
-        StrLenField("information", "", length_from=lambda p: p.length),
+        ShortField("type", 0),
+        FieldLenField("length", None, fmt="H", length_of="value"),
+        StrLenField("value", "", length_from=lambda p: p.length),
     ]
 
     def extract_padding(self, p):
@@ -231,7 +233,7 @@ class BMPTerminationTLV(Packet):
     name = "BGPTerminationTLV"
     fields_desc = [
         ShortField("type", 0),
-        FieldLenField("length", None, fmt="H", length_of="information"),
+        FieldLenField("length", None, fmt="H", length_of="value"),
         StrLenField("value", "", length_from=lambda p: p.length),
     ]
 
@@ -268,7 +270,7 @@ class BMPPeerUp(Packet):
 class BMPStatsCounterTLV(Packet):
     name = "BMPStatsCounterTLV"
     fields_desc = [
-        ShortField("Type", 0),
+        ShortField("type", 0),
         FieldLenField("length", None, fmt="H", length_of="data"),
         StrLenField("data", "", length_from=lambda p: p.length),
     ]
@@ -369,7 +371,7 @@ class BMPRouteMonitoring(Packet):
 class BMPRouteMirroring(Packet):
     name = "BMPRouteMirror"
     fields_desc = [
-        ShortField("Type", 0),
+        ShortField("type", 0),
         FieldLenField("length", None, fmt="H", length_of="data"),
         StrLenField("data", "", length_from=lambda p: p.length),
     ]
