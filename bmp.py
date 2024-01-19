@@ -59,6 +59,12 @@ _bmp_message_types = {
     100: "ROUTE POLICY AND ATTRIBUTE TRACE MESSAGE"     
 }
 
+# Used only for integrity checks
+_bmp_message_types_no_perpeerheader = {
+    4: "INITIATION MESSAGE",
+    5: "TERMINATION MESSAGE",
+}
+
 _bmp_cls_by_type = {
     0: "BMPRouteMonitoring",
     1: "BMPStats",
@@ -82,6 +88,13 @@ _bmp_status_flags = {
     "Add-Path": 7,
     "bit8": 8,
     "bit9": 9,
+}
+
+_bmp_peer_types = {
+    0: "Global Instance Peer",
+    1: "RD Instance Peer",
+    2: "Local Instance Peer",
+    3: "Loc-RIB Instance Peer",
 }
 
 # Convert the status name to position into an array
@@ -170,8 +183,11 @@ def _bmp_dispatcher(payload):
         cls = BMPHeader
     
     else:
+        # Some integrity checking
         if len(payload) > 5 and payload[:1] in bytes(_bmp_versions) \
-                            and payload[5:6] in bytes(_bmp_message_types):
+                            and payload[5:6] in bytes(_bmp_message_types) \
+                            and (payload[6:7] in bytes(_bmp_peer_types) 
+                                 or payload[5:6] in bytes(_bmp_message_types_no_perpeerheader)):
             cls = BMPHeader
 
     return cls
@@ -190,8 +206,11 @@ class BMP(Packet):
 
     def guess_payload_class(self, payload):
         cls = None
+        # Some integrity checking
         if len(payload) > 5 and payload[:1] in bytes(_bmp_versions) \
-                            and payload[5:6] in bytes(_bmp_message_types):
+                            and payload[5:6] in bytes(_bmp_message_types) \
+                            and (payload[6:7] in bytes(_bmp_peer_types) 
+                                 or payload[5:6] in bytes(_bmp_message_types_no_perpeerheader)):
             cls = BMPHeader
 
         return cls
